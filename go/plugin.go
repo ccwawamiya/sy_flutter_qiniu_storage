@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	flutter "github.com/go-flutter-desktop/go-flutter"
+	"github.com/go-flutter-desktop/go-flutter"
 	"github.com/go-flutter-desktop/go-flutter/plugin"
 	"github.com/qiniu/api.v7/v7/storage"
 	"golang.org/x/net/context"
@@ -28,9 +28,8 @@ type SyFlutterQiniuStoragePlugin struct {
 	textureRegistry *flutter.TextureRegistry
 	messenger       plugin.BinaryMessenger
 
-	blockCount    int
-	upBlockedIds  []int         // 已上传完成的block_id
-	upBlockedChan chan struct{} // block上传完成通知
+	blockCount   int
+	upBlockedIds []int // 已上传完成的block_id
 
 	eventSink *plugin.EventSink
 }
@@ -41,13 +40,16 @@ type ProgressRecord struct {
 	Progresses []storage.BlkputRet `json:"progresses"`
 }
 
-var errChan chan struct{}
+var (
+	cancelChan chan struct{}
+	notifyChan chan struct{}
+)
 
 // InitPlugin initializes the plugin.
 func (p *SyFlutterQiniuStoragePlugin) InitPlugin(messenger plugin.BinaryMessenger) error {
-	errChan = make(chan struct{}, 1)
+	cancelChan = make(chan struct{})
+	notifyChan = make(chan struct{})
 	p.messenger = messenger
-	p.upBlockedChan = make(chan struct{})
 	channel := plugin.NewMethodChannel(messenger, channelName, plugin.StandardMethodCodec{})
 	channel.HandleFunc("upload", p.upload)
 	channel.HandleFunc("cancelUpload", p.cancelUpload)
@@ -127,7 +129,7 @@ func (p *SyFlutterQiniuStoragePlugin) upload(arguments interface{}) (reply inter
 
 			if blkSize == int(ret.Offset) && !isCancel {
 				p.upBlockedIds = append(p.upBlockedIds, blkIdx)
-				p.upBlockedChan <- struct{}{}
+				notifyChan <- struct{}{}
 			}
 
 			//将进度序列化，然后写入文件
@@ -143,7 +145,7 @@ func (p *SyFlutterQiniuStoragePlugin) upload(arguments interface{}) (reply inter
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // cancel when we are finished consuming integers
 	go func() {
-		<-errChan
+		<-cancelChan
 		isCancel = true
 		fmt.Println("cancel upload")
 		cancel()
@@ -158,9 +160,7 @@ func (p *SyFlutterQiniuStoragePlugin) upload(arguments interface{}) (reply inter
 	// fmt.Println("upload over:",len(p.upBlockedIds),",",p.blockCount)
 	if len(p.upBlockedIds) < p.blockCount {
 		p.upBlockedIds = append(p.upBlockedIds, make([]int, p.blockCount-len(p.upBlockedIds))...)
-		p.upBlockedChan <- struct{}{}
-	} else {
-		p.upBlockedChan <- struct{}{}
+		notifyChan <- struct{}{}
 	}
 
 	//上传成功之后，一定记得删除这个进度文件
@@ -198,12 +198,17 @@ func responseData(suc bool, key string, err error, ret interface{}) (interface{}
 	return string(reply), err
 }
 
+func (p *SyFlutterQiniuStoragePlugin) cancelUpload(arguments interface{}) (reply interface{}, err error) {
+	cancelChan <- struct{}{}
+	return nil, nil
+}
+
 func (p *SyFlutterQiniuStoragePlugin) OnListen(arguments interface{}, sink *plugin.EventSink) { // flutter.EventChannel interface
 	p.eventSink = sink
 
 	percent := float64(0)
 	for {
-		<-p.upBlockedChan
+		<-notifyChan
 		percent = float64(len(p.upBlockedIds)) / float64(p.blockCount)
 		sink.Success(percent)
 		if len(p.upBlockedIds) == p.blockCount {
@@ -214,9 +219,4 @@ func (p *SyFlutterQiniuStoragePlugin) OnListen(arguments interface{}, sink *plug
 	sink.EndOfStream() // !not a complete implementation
 }
 
-func (p *SyFlutterQiniuStoragePlugin) cancelUpload(arguments interface{}) (reply interface{}, err error) {
-	errChan <- struct{}{}
-	return nil, nil
-}
-func (p *SyFlutterQiniuStoragePlugin) OnCancel(arguments interface{}) {
-}
+func (p *SyFlutterQiniuStoragePlugin) OnCancel(arguments interface{}) {}
