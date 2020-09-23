@@ -1,6 +1,6 @@
 # sy_flutter_qiniu_storage
 
-七牛云对象存储SDK，兼容iOS和Android
+七牛云对象存储SDK，兼容iOS、Android、Desktop (go-flutter)
 - 上传大文件
 - 进度监听
 - 取消上传
@@ -16,6 +16,9 @@
 
 #### Android集成
 无需任何操作
+
+#### Desktop (go-flutter) 集成
+- [集成 sy_flutter_qiniu_storage](https://github.com/ccwawamiya/sy_flutter_qiniu_storage/tree/master/go)
 
 ```dart
 import 'dart:io';
